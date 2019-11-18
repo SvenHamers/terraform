@@ -383,8 +383,10 @@ func (m *Meta) extendedFlagSet(n string) *flag.FlagSet {
 	}
 	varValues := m.variableArgs.Alias("-var")
 	varFiles := m.variableArgs.Alias("-var-file")
+	varUrl := m.variableArgs.Alias("-var-url")
 	f.Var(varValues, "var", "variables")
 	f.Var(varFiles, "var-file", "variable file")
+	f.Var(varUrl, "var-url", "variable url")
 
 	// Experimental features
 	experiment.Flag(f)

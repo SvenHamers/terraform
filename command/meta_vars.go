@@ -3,8 +3,12 @@ package command
 import (
 	"fmt"
 	"io/ioutil"
+	"io"
 	"os"
 	"strings"
+	"net/http"
+	"net/url"
+
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -13,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform/configs"
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/hashicorp/terraform/tfdiags"
+	"github.com/hashicorp/terraform-svchost"
 )
 
 // VarEnvPrefix is the prefix for environment variables that represent values
@@ -30,6 +35,7 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 	var diags tfdiags.Diagnostics
 	ret := map[string]backend.UnparsedVariableValue{}
 
+		fmt.Println(VarEnvPrefix)
 	// First we'll deal with environment variables, since they have the lowest
 	// precedence.
 	{
@@ -82,6 +88,13 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 		}
 	}
 
+	if varurl := os.Getenv("TF_VAR_URL"); varurl != "" {
+			diags = m.addVarsFromUrl(varurl,terraform.ValueFromNamedFile, ret)
+		
+	}
+
+
+
 	// Finally we process values given explicitly on the command line, either
 	// as individual literal settings or as additional files to read.
 	for _, rawFlag := range m.variableArgs.AllItems() {
@@ -112,6 +125,10 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 			moreDiags := m.addVarsFromFile(rawFlag.Value, terraform.ValueFromNamedFile, ret)
 			diags = diags.Append(moreDiags)
 
+		case "-var-url":
+			moreDiags:= m.addVarsFromUrl(rawFlag.Value, terraform.ValueFromNamedFile, ret)
+			diags = diags.Append(moreDiags)
+
 		default:
 			// Should never happen; always a bug in the code that built up
 			// the contents of m.variableArgs.
@@ -120,6 +137,99 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 	}
 
 	return ret, diags
+}
+
+func (m *Meta) addVarsFromUrl(urlname string, sourceType terraform.ValueSourceType, to map[string]backend.UnparsedVariableValue) tfdiags.Diagnostics {
+	var diags tfdiags.Diagnostics
+	u, err := url.Parse(urlname)
+    if err != nil {
+        diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Not a vallid url",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+	
+	
+
+	hostname, err := svchost.ForComparison(u.Host)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Not a vallid url",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+
+	creds, err := m.Services.CredentialsForHost(hostname)
+	if err != nil {
+		fmt.Println("error getting credentials")
+	}
+
+	
+	if creds != nil {
+		s := strings.Split(creds.Token(), ":")
+		fmt.Println("header: " + s[0] + ":" + s[1])
+	}
+
+	if creds == nil{
+		fmt.Println("Url does not have credentials, if needed add authentication in .terraformrc")
+	}
+	
+	
+	
+
+	tokens := strings.Split(urlname, "/")
+	fileName := tokens[len(tokens)-1]
+	output, err := os.Create(fileName)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Failed to download variables file",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+	defer output.Close()
+
+	response, err := http.Get(urlname)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Failed to download variables file",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+	defer response.Body.Close()
+
+	_, err = io.Copy(output, response.Body)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Failed to download variables file",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+	
+
+	diags = m.addVarsFromFile(fileName,sourceType,to)
+
+	err = os.Remove(fileName)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Failed to cleanup variables file",
+			fmt.Sprintf("failed:%s", urlname),
+		))
+		return diags
+	}
+
+	return diags
+
 }
 
 func (m *Meta) addVarsFromFile(filename string, sourceType terraform.ValueSourceType, to map[string]backend.UnparsedVariableValue) tfdiags.Diagnostics {

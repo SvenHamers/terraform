@@ -238,7 +238,10 @@ Options:
 
   -var-file=foo       Set variables in the Terraform configuration from
                       a file. If "terraform.tfvars" or any ".auto.tfvars"
-                      files are present, they will be automatically loaded.
+					  files are present, they will be automatically loaded.
+					  
+  -var-url=url        Specify an url where the variables are located.
+  					  Authentication can be configured in terraformrc
 `
 	return strings.TrimSpace(helpText)
 }
